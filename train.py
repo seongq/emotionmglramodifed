@@ -101,12 +101,9 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
     for data in dataloader:
         if train:
             optimizer.zero_grad()
-        # print(len(data))
-        # print(data[-3])
-        # if args.Dataset == "IEMOCAP":
+        
         textf1,textf2,textf3,textf4, visuf, acouf, qmask, umask, label = [d.to(device) for d in data[:-2]] if cuda else data[:-2]
-        # elif args.Dataset == "MELD":
-        #     textf1,textf2,textf3,textf4, visuf, acouf, qmask, umask, label = [d.to(device) for d in data[:-1]] if cuda else data[:-1]
+        
         if args.multi_modal:
             if args.mm_fusion_mthd=='concat':
                 if modals == 'avl':
@@ -246,6 +243,7 @@ if __name__ == '__main__':
         name_ = args.mm_fusion_mthd+'_'+args.modals+'_'+args.graph_type+'_'+args.graph_construct+'using_lstm_'+args.Dataset
     else:
         name_ = args.mm_fusion_mthd+'_'+args.modals+'_'+args.graph_type+'_'+args.graph_construct+str(args.Deep_GCN_nlayers)+'_'+args.Dataset
+        print(name_)
 
     if args.use_speaker:
         name_ = name_+'_speaker'
