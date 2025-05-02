@@ -132,9 +132,9 @@ class GCN(nn.Module):
                 l += emb_vector[2].reshape(1, -1).expand(l.shape[0], l.shape[1])                                  
 
         #---------------------------------------
-        # print("audio size", a.shape)
-        # print("video size", v.shape)
-        # print("text size", l.shape)
+        
+        
+        
         gnn_edge_index, gnn_features = self.create_gnn_index(a, v, l, dia_len, self.modals)
         x1 = self.fc1(gnn_features)  
         out = x1
@@ -173,34 +173,34 @@ class GCN(nn.Module):
         node_count = 0
         index =[]
         tmp = []
-        # print("dialogue length", dia_len)
-        # print("sum of dial length", sum(dia_len))
+        
+        
         for i in dia_len:
             nodes = list(range(i*num_modality))
-            # print('nodes', nodes)
+            
             nodes = [j + node_count for j in nodes] 
-            # print("nodes", nodes)
+            
             nodes_l = nodes[0:i*num_modality//3]
             nodes_a = nodes[i*num_modality//3:i*num_modality*2//3]
             nodes_v = nodes[i*num_modality*2//3:]
             index = index + list(permutations(nodes_l,2)) + list(permutations(nodes_a,2)) + list(permutations(nodes_v,2))
-            # print("edge index", index)
+            
             Gnodes=[]
             for _ in range(i):
                 Gnodes.append([nodes_l[_]] + [nodes_a[_]] + [nodes_v[_]])
-                # print("G_nodes", Gnodes)
+                
             for ii, _ in enumerate(Gnodes):
                 tmp = tmp +  list(permutations(_,2))
-                # print("permutations",list(permutations(_,2)))
+                
             if node_count == 0:
                 ll = l[0:0+i]
-                # print("l.shape", l.shape)
+                
                 aa = a[0:0+i]
                 vv = v[0:0+i]
                 features = torch.cat([ll,aa,vv],dim=0)
                 temp = 0+i
             else:
-                # print("l.shape", l.shape)
+                
                 ll = l[temp:temp+i]
                 aa = a[temp:temp+i]
                 vv = v[temp:temp+i]
@@ -209,7 +209,7 @@ class GCN(nn.Module):
                 temp = temp+i
             node_count = node_count + i*num_modality
         edge_index = torch.cat([torch.LongTensor(index).T,torch.LongTensor(tmp).T],1).to("cuda:0")
-        # print(edge_index)
+        
         return edge_index, features
     
     
@@ -217,7 +217,7 @@ class GCN(nn.Module):
 class UNIMODALGCN(nn.Module):
     def __init__(self, n_dim, nhidden, dropout, lamda, alpha, return_feature, use_residue, 
                 new_graph='full',n_speakers=2, modality=None, use_speaker=True, use_modal=False, num_L=3, num_K=4):
-        super(GCN, self).__init__()
+        super(UNIMODALGCN, self).__init__()
         self.return_feature = return_feature  #True
         self.use_residue = use_residue
         self.new_graph = new_graph
@@ -259,10 +259,10 @@ class UNIMODALGCN(nn.Module):
         #         l += emb_vector[2].reshape(1, -1).expand(l.shape[0], l.shape[1])                                  
 
         #---------------------------------------
-        # print("audio size", a.shape)
-        # print("video size", v.shape)
-        # print("text size", l.shape)
-        gnn_edge_index, gnn_features = self.create_gnn_index(uni_feature, dia_len, self.modals)
+        
+        
+        
+        gnn_edge_index, gnn_features = self.create_gnn_index(uni_feature, dia_len)
         x1 = self.fc1(gnn_features)  
         out = x1
         gnn_out = x1
@@ -292,15 +292,15 @@ class UNIMODALGCN(nn.Module):
         node_count = 0
         index =[]
         tmp = []
-        # print("dialogue length", dia_len)
-        # print("sum of dial length", sum(dia_len))
+        
+        
         for i in dia_len:
             nodes = list(range(i))
-            # print('nodes', nodes)
+            
             nodes = [j + node_count for j in nodes] 
-            # print("nodes", nodes)           
+            
             index = index + list(permutations(nodes,2)) 
-            # print("edge index", index)
+            
             if node_count == 0:
                 features = uni_feature[0:0+i]
                 temp = 0+i
@@ -310,5 +310,5 @@ class UNIMODALGCN(nn.Module):
                 temp = temp+i
             node_count = node_count + i
         edge_index = torch.LongTensor(index).T.to("cuda:0")
-        # print(edge_index)
+        
         return edge_index, features
