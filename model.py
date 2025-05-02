@@ -971,6 +971,8 @@ class ModelMKD(nn.Module):
         else:
             print ('Base model must be one of DialogRNN/LSTM/GRU')
             raise NotImplementedError
+        
+        
 
         self.align = MultiHeadCrossModalAttention(D_g, D_g, D_g, 2) 
 
@@ -990,6 +992,9 @@ class ModelMKD(nn.Module):
                 if self.use_residue:
                     self.smax_fc = nn.Linear((D_g+graph_hidden_size*2)*len(self.modals), n_classes)
                 else:
+                    self.smax_fc_l = nn.Linear(graph_hidden_size*2, n_classes)
+                    self.smax_fc_v = nn.Linear(graph_hidden_size*2, n_classes)
+                    self.smax_fc_a = nn.Linear(graph_hidden_size*2, n_classes)
                     self.smax_fc = nn.Linear((graph_hidden_size*2)*len(self.modals), n_classes)
                     print(graph_hidden_size)
             elif self.att_type == 'gated':
@@ -1095,12 +1100,33 @@ class ModelMKD(nn.Module):
             
             emotions_feat = nn.ReLU()(emotions_feat)
             
-            print(emotions_feat.shape)
             # print(emotions_feat.shape)
+            # print(emotions_feat.shape)
+            
+            length_emotions_feat = emotions_feat.shape[-1]
+            uni_feat_length = length_emotions_feat//3
+            emotions_feat_l = emotions_feat[:, 0:uni_feat_length]
+            # print(emotions_feat.shape)
+            # print(emotions_feat_l.shape)
+            emotions_feat_a = emotions_feat[:, uni_feat_length:2*uni_feat_length]
+            emotions_feat_v = emotions_feat[:, 2*uni_feat_length:]
+            
+            score_l = self.smax_fc_l(emotions_feat_l) 
+            score_a = self.smax_fc_a(emotions_feat_a)
+            score_v = self.smax_fc_v(emotions_feat_v)
+            
+            score_l = F.log_softmax(score_l,1)
+            score_a = F.log_softmax(score_a, 1)
+            score_v = F.log_softmax(score_v, 1)
+            # print(score_l.sum())
+            # print(score_a.sum())
             log_prob = F.log_softmax(self.smax_fc(emotions_feat), 1)
+            log_prob_l = score_l
+            log_prob_a = score_a
+            log_prob_v = score_v
             
         else:
             print("There are no such kind of graph")   
             
         
-        return log_prob
+        return log_prob, log_prob_l, log_prob_a, log_prob_v

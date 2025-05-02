@@ -133,9 +133,9 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
         if args.multi_modal and args.mm_fusion_mthd=='gated':
             log_prob  = model(textf, qmask, umask, lengths, acouf, visuf)
         elif args.multi_modal and args.mm_fusion_mthd=='concat_subsequently':   
-            log_prob = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
+            log_prob= model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
         elif args.multi_modal and args.mm_fusion_mthd=='concat_DHT':   
-            log_prob = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
+            log_prob , log_prob_l, log_prob_a, log_prob_v = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
         else:
             log_prob = model(textf, qmask, umask, lengths)
         label = torch.cat([label[j][:lengths[j]] for j in range(len(label))])
