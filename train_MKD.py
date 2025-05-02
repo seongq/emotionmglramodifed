@@ -7,7 +7,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from dataloader import IEMOCAPDataset, MELDDataset
-from model import MaskedNLLLoss, LSTMModel, GRUModel, Model, MaskedMSELoss, FocalLoss
+from model import MaskedNLLLoss, LSTMModel, GRUModel, Model, MaskedMSELoss, FocalLoss, ModelMKD
 from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, classification_report
 import pickle as pk
 import datetime
@@ -307,7 +307,7 @@ if __name__ == '__main__':
     if args.graph_model:
         seed_everything()
 
-        model = Model(args.base_model,
+        model = ModelMKD(args.base_model,
                                  D_m, D_g, D_e, graph_h,
                                  n_speakers=n_speakers,
                                  n_classes=n_classes,

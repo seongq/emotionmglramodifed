@@ -607,7 +607,7 @@ class Model(nn.Module):
         U = (r1 + r2 + r3 + r4)/4
         #U = torch.cat((textf,acouf),dim=-1)
         #=============roberta features
-        print(self.multi_modal)
+        # print(self.multi_modal)
         if self.base_model == 'LSTM':
             if not self.multi_modal:
                 if self.modals == "l":
@@ -909,7 +909,7 @@ class ModelMKD(nn.Module):
                  dynamic_edge_w=False,D_m_v=512,D_m_a=100,modals='avl',att_type='gated',av_using_lstm=False, dataset='IEMOCAP',
                  use_speaker=True, use_modal=False, num_L = 3, num_K = 4):
         
-        super(Model, self).__init__()
+        super(ModelMKD, self).__init__()
 
         self.base_model = base_model
         self.avec = avec
@@ -991,6 +991,7 @@ class ModelMKD(nn.Module):
                     self.smax_fc = nn.Linear((D_g+graph_hidden_size*2)*len(self.modals), n_classes)
                 else:
                     self.smax_fc = nn.Linear((graph_hidden_size*2)*len(self.modals), n_classes)
+                    print(graph_hidden_size)
             elif self.att_type == 'gated':
                 if len(self.modals) == 3:
                     self.smax_fc = nn.Linear(100*len(self.modals), graph_hidden_size)
@@ -1026,7 +1027,7 @@ class ModelMKD(nn.Module):
         U = (r1 + r2 + r3 + r4)/4
         #U = torch.cat((textf,acouf),dim=-1)
         #=============roberta features
-        print(self.multi_modal)
+        # print(self.multi_modal)
         if self.base_model == 'LSTM':
             if not self.multi_modal:
                 if self.modals == "l":
@@ -1094,7 +1095,7 @@ class ModelMKD(nn.Module):
             
             emotions_feat = nn.ReLU()(emotions_feat)
             
-            
+            print(emotions_feat.shape)
             # print(emotions_feat.shape)
             log_prob = F.log_softmax(self.smax_fc(emotions_feat), 1)
             
