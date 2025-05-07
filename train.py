@@ -13,7 +13,7 @@ import pickle as pk
 import datetime
 import torch.nn.functional as F
 
-seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
+seed = 67137 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
 def seed_everything(seed=seed):
     random.seed(seed)
     np.random.seed(seed)

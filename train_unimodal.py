@@ -195,7 +195,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--batch-size', type=int, default=16, metavar='BS', help='batch size')
     
-    parser.add_argument('--epochs', type=int, default=60, metavar='E', help='number of epochs')
+    parser.add_argument('--epochs', type=int, default=100, metavar='E', help='number of epochs')
     
     parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')
     
@@ -243,7 +243,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--num_K', type=int, default=4, help='num_convs')
     
-    parser.add_argument("--modality", type=str, choices = ('text','visual', 'audio'))
+    parser.add_argument("--modality", type=str, required=True, choices = ('text','visual', 'audio'))
 
     args = parser.parse_args()
     today = datetime.datetime.now()
@@ -251,7 +251,7 @@ if __name__ == '__main__':
     if args.av_using_lstm:
         name_ = args.mm_fusion_mthd+'_'+args.modals+'_'+args.graph_type+'_'+args.graph_construct+'using_lstm_'+args.Dataset
     else:
-        name_ = args.mm_fusion_mthd+'_'+args.modals+'_'+args.graph_type+'_'+args.graph_construct+str(args.Deep_GCN_nlayers)+'_'+args.Dataset
+        name_ = args.mm_fusion_mthd+'_'+args.modality+'_'+args.graph_type+'_'+args.graph_construct+str(args.Deep_GCN_nlayers)+'_'+args.Dataset
         print(name_)
 
     if args.use_speaker:
@@ -384,7 +384,9 @@ if __name__ == '__main__':
     best_fscore, best_loss, best_label, best_pred, best_mask = None, None, None, None, None
     all_fscore, all_acc, all_loss = [], [], []
 
-
+    best_test_acc = 0.0
+    save_path = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "unimodal", args.modality, "unimodal_teacher.pth")
+    print(save_path)
     for e in range(n_epochs):
         start_time = time.time()
 
@@ -403,7 +405,14 @@ if __name__ == '__main__':
             best_fscore = test_fscore
             best_label, best_pred = test_label, test_pred
 
-       
+        if test_acc > best_test_acc:
+            best_test_acc = test_acc
+            torch.save({
+                'epoch':e+1,
+                "model_state_dict":model.state_dict(),
+                "optimizer_state_dict":optimizer.state_dict(),
+                "test_acc":test_acc,
+                "test_loss":test_loss}, save_path)
 
         print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
                 format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
