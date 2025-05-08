@@ -7,21 +7,22 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from dataloader import IEMOCAPDataset, MELDDataset
-from model import MaskedNLLLoss, LSTMModel, GRUModel, Model, MaskedMSELoss, FocalLoss, ModelMKD
+from model import MaskedNLLLoss, LSTMModel, GRUModel, Model, MaskedMSELoss, FocalLoss, ModelMKD, UNIMODALModel
 from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, classification_report
 import pickle as pk
 import datetime
 import torch.nn.functional as F
+from utils import seed_everything, compute_detailed_metrics
 
-seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
-def seed_everything(seed=seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
+# seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
+# def seed_everything(dataset_name):
+#     random.seed(seed)
+#     np.random.seed(seed)
+#     torch.manual_seed(seed)
+#     torch.cuda.manual_seed(seed)
+#     torch.cuda.manual_seed_all(seed)
+#     torch.backends.cudnn.benchmark = False
+#     torch.backends.cudnn.deterministic = True
 
 def get_train_valid_sampler(trainset, valid=0.1, dataset='IEMOCAP'):
     size = len(trainset)
@@ -87,17 +88,21 @@ def get_IEMOCAP_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=Fals
     return train_loader, valid_loader, test_loader
     
 
-def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, modals, optimizer=None, train=False, dataset='IEMOCAP'):
+def train_or_eval_graph_model(model,audiomodel, visualmodel, textmodel, loss_function, dataloader, epoch, cuda, modals, optimizer=None, train=False, dataset='IEMOCAP'):
     losses, preds, labels = [], [], []
     vids = []
 
     assert not train or optimizer!=None
     if train:
         model.train()
+        # audiomodel.train()
+        # visualmodel.train()
+        # textmodel.train()
     else:
         model.eval()
+        
 
-    seed_everything()
+    seed_everything(args.Dataset)
     for data in dataloader:
         if train:
             optimizer.zero_grad()
@@ -135,11 +140,36 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
         elif args.multi_modal and args.mm_fusion_mthd=='concat_subsequently':   
             log_prob= model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
         elif args.multi_modal and args.mm_fusion_mthd=='concat_DHT':   
+            # print("여기작동")
             log_prob , log_prob_l, log_prob_a, log_prob_v = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
         else:
             log_prob = model(textf, qmask, umask, lengths)
-        label = torch.cat([label[j][:lengths[j]] for j in range(len(label))])
-        loss = loss_function(log_prob, label)
+            
+        if train:
+            #MKD 코드
+            pseudo_audio = audiomodel(acouf, qmask, umask, lengths)
+            pseudo_visual = visualmodel(visuf, qmask, umask, lengths)
+            pseudo_text = textmodel([textf1,textf2,textf3,textf4], qmask, umask, lengths)
+            # print(pseudo_text)
+            # print(label.shape)
+            # print(label.shape)
+            label = torch.cat([label[j][:lengths[j]] for j in range(len(label))])
+            # print(label.shape)
+            KL_audio = F.kl_div(pseudo_audio, log_prob_a, log_target = True, reduction="batchmean")
+            KL_visual = F.kl_div(pseudo_visual, log_prob_v, log_target = True, reduction="batchmean")
+            KL_text = F.kl_div(pseudo_text, log_prob_l, log_target = True, reduction="batchmean")
+            
+            CE_audio = F.nll_loss(log_prob_a, label)
+            CE_visual = F.nll_loss(log_prob_v, label)
+            CE_text = F.nll_loss(log_prob_l, label)
+            
+            
+            loss = loss_function(log_prob, label) + KL_audio + KL_visual + KL_text + CE_audio + CE_visual + CE_text
+        else:
+            label = torch.cat([label[j][:lengths[j]] for j in range(len(label))])
+            loss = loss_function(log_prob, label)
+        
+        
         preds.append(torch.argmax(log_prob, 1).cpu().numpy())
         labels.append(label.cpu().numpy())
         losses.append(loss.item())
@@ -188,7 +218,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--batch-size', type=int, default=16, metavar='BS', help='batch size')
     
-    parser.add_argument('--epochs', type=int, default=60, metavar='E', help='number of epochs')
+    parser.add_argument('--epochs', type=int, default=100, metavar='E', help='number of epochs')
     
     parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')
     
@@ -305,7 +335,7 @@ if __name__ == '__main__':
 
 
     if args.graph_model:
-        seed_everything()
+        seed_everything(args.Dataset)
 
         model = ModelMKD(args.base_model,
                                  D_m, D_g, D_e, graph_h,
@@ -330,12 +360,112 @@ if __name__ == '__main__':
                                  use_modal=args.use_modal,
                                  num_L = args.num_L,
                                  num_K = args.num_K)
-
+        
+        if args.Dataset == "MELD":
+            checkpoint_path_audio = "/workspace/MGLRA/save_folder/MELD/unimodal/audio/unimodal_teacher.pth"
+            checkpoint_path_visual = "/workspace/MGLRA/save_folder/MELD/unimodal/visual/unimodal_teacher.pth"
+            checkpoint_path_text = "/workspace/MGLRA/save_folder/MELD/unimodal/text/unimodal_teacher.pth"
+            
+        elif args.Dataset == "IEMOCAP":
+            checkpoint_path_audio = "/workspace/MGLRA/save_folder/IEMOCAP/unimodal/audio/unimodal_teacher.pth"
+            checkpoint_path_visual = "/workspace/MGLRA/save_folder/IEMOCAP/unimodal/visual/unimodal_teacher.pth"
+            checkpoint_path_text = "/workspace/MGLRA/save_folder/IEMOCAP/unimodal/text/unimodal_teacher.pth"
+            
+        checkpoint_audio = torch.load(checkpoint_path_audio)
+        checkpoint_visual = torch.load(checkpoint_path_visual)
+        checkpoint_text = torch.load(checkpoint_path_text)
+        audiomodel = UNIMODALModel(args.base_model,
+                                 D_m, D_g, D_e, graph_h,
+                                 modality = "audio",
+                                 n_speakers=n_speakers,
+                                 n_classes=n_classes,
+                                 dropout=args.dropout,
+                                 no_cuda=args.no_cuda,
+                                 graph_type=args.graph_type,
+                                 use_topic=args.use_topic,
+                                 alpha=args.alpha,
+                                 multiheads=args.multiheads,
+                                 graph_construct=args.graph_construct,
+                                 use_GCN=args.use_gcn,
+                                 use_residue=args.use_residue,
+                                 D_m_v = D_visual,
+                                 D_m_a = D_audio,
+                                 att_type=args.mm_fusion_mthd,
+                                 av_using_lstm=args.av_using_lstm,
+                                 dataset=args.Dataset,
+                                 use_speaker=args.use_speaker,
+                                 use_modal=args.use_modal,
+                                 num_L = args.num_L,
+                                 num_K = args.num_K)
+        
+        visualmodel = UNIMODALModel(args.base_model,
+                                 D_m, D_g, D_e, graph_h,
+                                 modality = "visual",
+                                 n_speakers=n_speakers,
+                                 n_classes=n_classes,
+                                 dropout=args.dropout,
+                                 no_cuda=args.no_cuda,
+                                 graph_type=args.graph_type,
+                                 use_topic=args.use_topic,
+                                 alpha=args.alpha,
+                                 multiheads=args.multiheads,
+                                 graph_construct=args.graph_construct,
+                                 use_GCN=args.use_gcn,
+                                 use_residue=args.use_residue,
+                                 D_m_v = D_visual,
+                                 D_m_a = D_audio,
+                                 att_type=args.mm_fusion_mthd,
+                                 av_using_lstm=args.av_using_lstm,
+                                 dataset=args.Dataset,
+                                 use_speaker=args.use_speaker,
+                                 use_modal=args.use_modal,
+                                 num_L = args.num_L,
+                                 num_K = args.num_K)
+        
+        textmodel = UNIMODALModel(args.base_model,
+                                 D_m, D_g, D_e, graph_h,
+                                 modality = "text",
+                                 n_speakers=n_speakers,
+                                 n_classes=n_classes,
+                                 dropout=args.dropout,
+                                 no_cuda=args.no_cuda,
+                                 graph_type=args.graph_type,
+                                 use_topic=args.use_topic,
+                                 alpha=args.alpha,
+                                 multiheads=args.multiheads,
+                                 graph_construct=args.graph_construct,
+                                 use_GCN=args.use_gcn,
+                                 use_residue=args.use_residue,
+                                 D_m_v = D_visual,
+                                 D_m_a = D_audio,
+                                 att_type=args.mm_fusion_mthd,
+                                 av_using_lstm=args.av_using_lstm,
+                                 dataset=args.Dataset,
+                                 use_speaker=args.use_speaker,
+                                 use_modal=args.use_modal,
+                                 num_L = args.num_L,
+                                 num_K = args.num_K)
         print ('Graph NN with', args.base_model, 'as base model.')
+        
+        audiomodel.load_state_dict(checkpoint_audio['model_state_dict'])
+        visualmodel.load_state_dict(checkpoint_visual['model_state_dict'])
+        textmodel.load_state_dict(checkpoint_text['model_state_dict'])
+        
+        audiomodel.eval()
+        visualmodel.eval()
+        textmodel.eval()
+        
+        for unimodalmodel in [audiomodel, visualmodel, textmodel]:
+            unimodalmodel.eval()  # inference mode (dropout, batchnorm)
+            for param in unimodalmodel.parameters():
+                param.requires_grad = False  # no gradients
         name = 'Graph'
 
     if cuda:
         model.to(device)
+        audiomodel.to(device)
+        visualmodel.to(device)
+        textmodel.to(device)
 
     if args.Dataset == 'IEMOCAP':
         loss_weights = torch.FloatTensor([1/0.086747,
@@ -375,27 +505,72 @@ if __name__ == '__main__':
     else:
         print("There is no such dataset")
 
-    best_fscore, best_loss, best_label, best_pred, best_mask = None, None, None, None, None
+    best_fscore, best_acc, best_loss, best_label_f1, best_label_acc, best_pred_f1, best_pred_acc , best_mask = None, None, None, None, None, None, None, None
     all_fscore, all_acc, all_loss = [], [], []
 
-
+    
+    model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "MKD")
+    best_f1_model_path = None
+    best_acc_model_path = None
     for e in range(n_epochs):
         start_time = time.time()
 
-        train_loss, train_acc, _, _, train_fscore, _ = train_or_eval_graph_model(model, loss_function, train_loader, e, cuda, args.modals, \
+        train_loss, train_acc, _, _, train_fscore, _ = train_or_eval_graph_model(model, audiomodel, visualmodel, textmodel, loss_function, train_loader, e, cuda, args.modals, \
                                                                                  optimizer, True, dataset=args.Dataset)
-        valid_loss, valid_acc, _, _, valid_fscore = train_or_eval_graph_model(model, loss_function, valid_loader, e, cuda, args.modals, \
+        valid_loss, valid_acc, _, _, valid_fscore = train_or_eval_graph_model(model, audiomodel, visualmodel, textmodel, loss_function, valid_loader, e, cuda, args.modals, \
                                                                               dataset=args.Dataset,)
-        test_loss, test_acc, test_label, test_pred, test_fscore, _ = train_or_eval_graph_model(model, loss_function, test_loader, e, cuda, args.modals, \
+        test_loss, test_acc, test_label, test_pred, test_fscore, _ = train_or_eval_graph_model(model,audiomodel, visualmodel, textmodel, loss_function, test_loader, e, cuda, args.modals, \
                                                                                                dataset=args.Dataset)
         all_fscore.append(test_fscore)
+        all_acc.append(test_acc)
 
-        if best_loss == None or best_loss > test_loss:
-            best_loss, best_label, best_pred = test_loss, test_label, test_pred
+        # if best_loss == None or best_loss > test_loss:
+        #     best_loss, best_label, best_pred = test_loss, test_label, test_pred
 
-        if best_fscore == None or best_fscore < test_fscore:
-            best_fscore = test_fscore
-            best_label, best_pred = test_label, test_pred
+        # if best_fscore == None or best_fscore < test_fscore:
+        #     if best_f1_model_path and os.path.exists(best_f1_model_path):
+        #         os.remove(best_f1_model_path)
+        best_fscore = test_fscore
+        best_label_f1, best_pred_f1 = test_label, test_pred
+        
+        best_mask = None  # ensure mask is available
+
+        # metrics 계산
+        f1_metrics = compute_detailed_metrics(best_label_f1, best_pred_f1, sample_weight=best_mask)
+        wf1 = f1_score(best_label_f1, best_pred_f1, sample_weight=best_mask, average='weighted')
+        wacc = f1_metrics['weighted_accuracy']
+        acc = accuracy_score(best_label_f1, best_pred_f1)
+
+        filename = f"model_f1_{best_fscore:.2f}_acc_{acc*100:.2f}_wacc_{wacc*100:.2f}_wf1_{wf1*100:.2f}.pth"
+        best_f1_model_path = os.path.join(model_save_dir, filename)
+
+        torch.save({
+            "model_state_dict": model.state_dict(),
+            "args": vars(args),
+            "metrics": f1_metrics,
+        }, best_f1_model_path)
+            
+    # if best_acc == None or best_acc < test_acc:
+    #     if best_acc_model_path and os.path.exists(best_acc_model_path):
+    #         os.remove(best_acc_model_path)
+
+        best_acc = test_acc
+        best_label_acc, best_pred_acc = test_label, test_pred
+        best_mask = None
+
+        acc_metrics = compute_detailed_metrics(best_label_acc, best_pred_acc, sample_weight=best_mask)
+        wf1 = f1_score(best_label_acc, best_pred_acc, sample_weight=best_mask, average='weighted')
+        wacc = acc_metrics['weighted_accuracy']
+        acc = accuracy_score(best_label_acc, best_pred_acc)
+
+        filename = f"model_acc_{best_acc:.2f}_acc_{acc*100:.2f}_wacc_{wacc*100:.2f}_wf1_{wf1*100:.2f}.pth"
+        best_acc_model_path = os.path.join(model_save_dir, filename)
+
+        torch.save({
+            "model_state_dict": model.state_dict(),
+            "args": vars(args),
+            "metrics": acc_metrics,
+        }, best_acc_model_path)
 
         if args.tensorboard:
             writer.add_scalar('test: accuracy', test_acc, e)
@@ -407,8 +582,13 @@ if __name__ == '__main__':
                 format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
         if (e+1)%10 == 0:
             print ('----------best F-Score:', max(all_fscore))
-            print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))
-            print(confusion_matrix(best_label,best_pred,sample_weight=best_mask))
+            print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
+            print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
+            
+            print ('----------best acc:', max(all_acc))
+            print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
+            print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))
+
 
         
     
@@ -416,8 +596,14 @@ if __name__ == '__main__':
     if args.tensorboard:
         writer.close()
     if not args.testing:
-        print('Test performance..')
+        print('Test performance.. by F-score')
         print ('F-Score:', max(all_fscore))
 
-        print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))
-        print(confusion_matrix(best_label,best_pred,sample_weight=best_mask))
+        print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
+        print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
+        
+        print('Test performance.. by Acc')
+        print ('ACC:', max(all_acc))
+
+        print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
+        print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))

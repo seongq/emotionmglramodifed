@@ -12,16 +12,17 @@ from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, classifi
 import pickle as pk
 import datetime
 import torch.nn.functional as F
+from utils import seed_everything,compute_detailed_metrics
 
-seed = 67137 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
-def seed_everything(seed=seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
+# seed = 67137 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
+# def seed_everything(seed=seed):
+#     random.seed(seed)
+#     np.random.seed(seed)
+#     torch.manual_seed(seed)
+#     torch.cuda.manual_seed(seed)
+#     torch.cuda.manual_seed_all(seed)
+#     torch.backends.cudnn.benchmark = False
+#     torch.backends.cudnn.deterministic = True
 
 def get_train_valid_sampler(trainset, valid=0.1, dataset='IEMOCAP'):
     size = len(trainset)
@@ -97,7 +98,7 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
     else:
         model.eval()
 
-    seed_everything()
+    seed_everything(args.Dataset)
     for data in dataloader:
         if train:
             optimizer.zero_grad()
@@ -188,7 +189,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--batch-size', type=int, default=16, metavar='BS', help='batch size')
     
-    parser.add_argument('--epochs', type=int, default=60, metavar='E', help='number of epochs')
+    parser.add_argument('--epochs', type=int, default=100, metavar='E', help='number of epochs')
     
     parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')
     
@@ -305,7 +306,7 @@ if __name__ == '__main__':
 
 
     if args.graph_model:
-        seed_everything()
+        seed_everything(args.Dataset)
 
         model = Model(args.base_model,
                                  D_m, D_g, D_e, graph_h,
@@ -375,8 +376,13 @@ if __name__ == '__main__':
     else:
         print("There is no such dataset")
 
-    best_fscore, best_loss, best_label, best_pred, best_mask = None, None, None, None, None
+    best_fscore, best_acc, best_loss, best_label_f1, best_label_acc, best_pred_f1, best_pred_acc , best_mask = None, None, None, None, None, None, None, None
     all_fscore, all_acc, all_loss = [], [], []
+
+    
+    model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "original")
+    best_f1_model_path = None
+    best_acc_model_path = None
 
 
     for e in range(n_epochs):
@@ -389,26 +395,86 @@ if __name__ == '__main__':
         test_loss, test_acc, test_label, test_pred, test_fscore, _ = train_or_eval_graph_model(model, loss_function, test_loader, e, cuda, args.modals, \
                                                                                                dataset=args.Dataset)
         all_fscore.append(test_fscore)
+        all_acc.append(test_acc)
+        best_fscore = test_fscore
+        best_label_f1, best_pred_f1 = test_label, test_pred
+        
+        best_mask = None  # ensure mask is available
 
-        if best_loss == None or best_loss > test_loss:
-            best_loss, best_label, best_pred = test_loss, test_label, test_pred
+        # metrics 계산
+        f1_metrics = compute_detailed_metrics(best_label_f1, best_pred_f1, sample_weight=best_mask)
+        wf1 = f1_score(best_label_f1, best_pred_f1, sample_weight=best_mask, average='weighted')
+        wacc = f1_metrics['weighted_accuracy']
+        acc = accuracy_score(best_label_f1, best_pred_f1)
 
-        if best_fscore == None or best_fscore < test_fscore:
-            best_fscore = test_fscore
-            best_label, best_pred = test_label, test_pred
+        filename = f"model_f1_{best_fscore:.2f}_acc_{acc*100:.2f}_wacc_{wacc*100:.2f}_wf1_{wf1*100:.2f}.pth"
+        best_f1_model_path = os.path.join(model_save_dir, filename)
 
-        if args.tensorboard:
-            writer.add_scalar('test: accuracy', test_acc, e)
-            writer.add_scalar('test: fscore', test_fscore, e)
-            writer.add_scalar('train: accuracy', train_acc, e)
-            writer.add_scalar('train: fscore', train_fscore, e)
+        torch.save({
+            "model_state_dict": model.state_dict(),
+            "args": vars(args),
+            "metrics": f1_metrics,
+        }, best_f1_model_path)
+            
+    # if best_acc == None or best_acc < test_acc:
+    #     if best_acc_model_path and os.path.exists(best_acc_model_path):
+    #         os.remove(best_acc_model_path)
 
-        print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
-                format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
-        if (e+1)%10 == 0:
-            print ('----------best F-Score:', max(all_fscore))
-            print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))
-            print(confusion_matrix(best_label,best_pred,sample_weight=best_mask))
+        best_acc = test_acc
+        best_label_acc, best_pred_acc = test_label, test_pred
+        best_mask = None
+
+        acc_metrics = compute_detailed_metrics(best_label_acc, best_pred_acc, sample_weight=best_mask)
+        wf1 = f1_score(best_label_acc, best_pred_acc, sample_weight=best_mask, average='weighted')
+        wacc = acc_metrics['weighted_accuracy']
+        acc = accuracy_score(best_label_acc, best_pred_acc)
+
+        filename = f"model_acc_{best_acc:.2f}_acc_{acc*100:.2f}_wacc_{wacc*100:.2f}_wf1_{wf1*100:.2f}.pth"
+        best_acc_model_path = os.path.join(model_save_dir, filename)
+
+        torch.save({
+            "model_state_dict": model.state_dict(),
+            "args": vars(args),
+            "metrics": acc_metrics,
+        }, best_acc_model_path)
+        # if best_loss == None or best_loss > test_loss:
+        #     best_loss, best_label, best_pred = test_loss, test_label, test_pred
+
+        # if best_fscore == None or best_fscore < test_fscore:
+        #     if best_f1_model_path and os.path.exists(best_f1_model_path):
+        #         os.remove(best_f1_model_path)
+        #     best_fscore = test_fscore
+        #     best_label_f1, best_pred_f1 = test_label, test_pred
+            
+        #     best_f1_model_path = os.path.join(model_save_dir, f"model_f1_{best_fscore:.2f}.pth")
+            
+        #     torch.save({"model_state_dict": model.state_dict(), "args":vars(args)}, best_f1_model_path)
+            
+        # if best_acc == None or best_acc < test_acc:
+        #     if best_acc_model_path and os.path.exists(best_acc_model_path):
+        #         os.remove(best_acc_model_path)
+
+        #     best_acc = test_acc
+        #     best_label_acc, best_pred_acc = test_label, test_pred
+        #     best_acc_model_path = os.path.join(model_save_dir, f"model_acc_{best_acc:.2f}.pth")
+        #     torch.save({"model_state_dict": model.state_dict(),  "args":vars(args)}, best_acc_model_path)
+
+        # if args.tensorboard:
+        #     writer.add_scalar('test: accuracy', test_acc, e)
+        #     writer.add_scalar('test: fscore', test_fscore, e)
+        #     writer.add_scalar('train: accuracy', train_acc, e)
+        #     writer.add_scalar('train: fscore', train_fscore, e)
+
+        # print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
+        #         format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
+        # if (e+1)%10 == 0:
+        #     print ('----------best F-Score:', max(all_fscore))
+        #     print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
+        #     print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
+            
+        #     print ('----------best acc:', max(all_acc))
+        #     print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
+        #     print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))
 
         
     
@@ -416,8 +482,14 @@ if __name__ == '__main__':
     if args.tensorboard:
         writer.close()
     if not args.testing:
-        print('Test performance..')
+        print('Test performance.. by F-score')
         print ('F-Score:', max(all_fscore))
 
-        print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))
-        print(confusion_matrix(best_label,best_pred,sample_weight=best_mask))
+        print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
+        print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
+        
+        print('Test performance.. by Acc')
+        print ('ACC:', max(all_acc))
+
+        print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
+        print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))

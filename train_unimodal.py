@@ -12,16 +12,26 @@ from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, classifi
 import pickle as pk
 import datetime
 import torch.nn.functional as F
+from utils import seed_everything
 
-seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
-def seed_everything(seed=seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
+# seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
+# def seed_everything(dataset_name):
+#     random.seed(seed)
+#     np.random.seed(seed)
+#     torch.manual_seed(seed)
+#     torch.cuda.manual_seed(seed)
+#     torch.cuda.manual_seed_all(seed)
+#     torch.backends.cudnn.benchmark = False
+#     torch.backends.cudnn.deterministic = True
+# seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
+# def seed_everything(seed=seed):
+#     random.seed(seed)
+#     np.random.seed(seed)
+#     torch.manual_seed(seed)
+#     torch.cuda.manual_seed(seed)
+#     torch.cuda.manual_seed_all(seed)
+#     torch.backends.cudnn.benchmark = False
+#     torch.backends.cudnn.deterministic = True
 
 def get_train_valid_sampler(trainset, valid=0.1, dataset='IEMOCAP'):
     size = len(trainset)
@@ -97,7 +107,7 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
     else:
         model.eval()
 
-    seed_everything()
+    seed_everything(args.Dataset)
     for data in dataloader:
         if train:
             optimizer.zero_grad()
@@ -311,7 +321,7 @@ if __name__ == '__main__':
 
 
     if args.graph_model:
-        seed_everything()
+        seed_everything(args.Dataset)
 
         model = UNIMODALModel(args.base_model,
                                  D_m, D_g, D_e, graph_h,
