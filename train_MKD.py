@@ -1,5 +1,5 @@
 import os
-
+import pickle
 import numpy as np, argparse, time, random
 import torch
 import torch.nn as nn
@@ -14,15 +14,7 @@ import datetime
 import torch.nn.functional as F
 from utils import seed_everything, compute_detailed_metrics
 
-# seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
-# def seed_everything(dataset_name):
-#     random.seed(seed)
-#     np.random.seed(seed)
-#     torch.manual_seed(seed)
-#     torch.cuda.manual_seed(seed)
-#     torch.cuda.manual_seed_all(seed)
-#     torch.backends.cudnn.benchmark = False
-#     torch.backends.cudnn.deterministic = True
+
 
 def get_train_valid_sampler(trainset, valid=0.1, dataset='IEMOCAP'):
     size = len(trainset)
@@ -102,7 +94,7 @@ def train_or_eval_graph_model(model,audiomodel, visualmodel, textmodel, loss_fun
         model.eval()
         
 
-    seed_everything(args.Dataset)
+    seed_everything(seed_number)
     for data in dataloader:
         if train:
             optimizer.zero_grad()
@@ -265,6 +257,8 @@ if __name__ == '__main__':
     parser.add_argument('--num_L', type=int, default=3, help='num_hyperconvs')
 
     parser.add_argument('--num_K', type=int, default=4, help='num_convs')
+    
+    parser.add_argument("--seed_number", type=int, default=1, required=True)
 
     args = parser.parse_args()
     today = datetime.datetime.now()
@@ -296,6 +290,7 @@ if __name__ == '__main__':
     n_epochs   = args.epochs
     batch_size = args.batch_size
     modals = args.modals
+    seed_number = args.seed_number
     feat2dim = {'IS10':1582,'3DCNN':512,'textCNN':100,'bert':768,'denseface':342,'MELD_text':600,'MELD_audio':300}
     D_audio = feat2dim['IS10'] if args.Dataset=='IEMOCAP' else feat2dim['MELD_audio']
     D_visual = feat2dim['denseface']
@@ -335,7 +330,7 @@ if __name__ == '__main__':
 
 
     if args.graph_model:
-        seed_everything(args.Dataset)
+        seed_everything(seed_number)
 
         model = ModelMKD(args.base_model,
                                  D_m, D_g, D_e, graph_h,
@@ -505,13 +500,27 @@ if __name__ == '__main__':
     else:
         print("There is no such dataset")
 
-    best_fscore, best_acc, best_loss, best_label_f1, best_label_acc, best_pred_f1, best_pred_acc , best_mask = None, None, None, None, None, None, None, None
+    best_fscore, best_acc, best_loss, best_label_f1, best_label_acc, best_pred_f1, best_pred_acc , best_mask = -1000, -1000, None, None, None, None, None, None
     all_fscore, all_acc, all_loss = [], [], []
 
+    if args.av_using_lstm:
+        model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "MKD_av_using_lstm")
+        os.makedirs(model_save_dir, exist_ok=True)
+    else:
+        model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "MKD")
+        os.makedirs(model_save_dir, exist_ok=True)
     
-    model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "MKD")
+    
+    
+    from datetime import datetime
+    import pytz
+
+    kst = pytz.timezone("Asia/Seoul")
+    now_kst = datetime.now(kst)
+    timestamp_str = now_kst.strftime("%Y%m%d%H%M")
+    # print(timestamp_str)
+    pickle_path = os.path.join(f"/workspace/MGLRA/result/{args.Dataset}", "result.pkl")
     best_f1_model_path = None
-    best_acc_model_path = None
     for e in range(n_epochs):
         start_time = time.time()
 
@@ -524,70 +533,99 @@ if __name__ == '__main__':
         all_fscore.append(test_fscore)
         all_acc.append(test_acc)
 
-        # if best_loss == None or best_loss > test_loss:
-        #     best_loss, best_label, best_pred = test_loss, test_label, test_pred
-
-        # if best_fscore == None or best_fscore < test_fscore:
-        #     if best_f1_model_path and os.path.exists(best_f1_model_path):
-        #         os.remove(best_f1_model_path)
-        best_fscore = test_fscore
-        best_label_f1, best_pred_f1 = test_label, test_pred
-        
-        best_mask = None  # ensure mask is available
-
-        # metrics 계산
-        f1_metrics = compute_detailed_metrics(best_label_f1, best_pred_f1, sample_weight=best_mask)
-        wf1 = f1_score(best_label_f1, best_pred_f1, sample_weight=best_mask, average='weighted')
-        wacc = f1_metrics['weighted_accuracy']
-        acc = accuracy_score(best_label_f1, best_pred_f1)
-
-        filename = f"model_f1_{best_fscore:.2f}_acc_{acc*100:.2f}_wacc_{wacc*100:.2f}_wf1_{wf1*100:.2f}.pth"
-        best_f1_model_path = os.path.join(model_save_dir, filename)
-
-        torch.save({
-            "model_state_dict": model.state_dict(),
-            "args": vars(args),
-            "metrics": f1_metrics,
-        }, best_f1_model_path)
+        if (best_fscore < test_fscore):
+            best_fscore = test_fscore
+            best_acc = test_acc
+            best_label_f1, best_pred_f1 = test_label, test_pred
             
-    # if best_acc == None or best_acc < test_acc:
-    #     if best_acc_model_path and os.path.exists(best_acc_model_path):
-    #         os.remove(best_acc_model_path)
+            best_mask = None  # ensure mask is available
 
-        best_acc = test_acc
-        best_label_acc, best_pred_acc = test_label, test_pred
-        best_mask = None
-
-        acc_metrics = compute_detailed_metrics(best_label_acc, best_pred_acc, sample_weight=best_mask)
-        wf1 = f1_score(best_label_acc, best_pred_acc, sample_weight=best_mask, average='weighted')
-        wacc = acc_metrics['weighted_accuracy']
-        acc = accuracy_score(best_label_acc, best_pred_acc)
-
-        filename = f"model_acc_{best_acc:.2f}_acc_{acc*100:.2f}_wacc_{wacc*100:.2f}_wf1_{wf1*100:.2f}.pth"
-        best_acc_model_path = os.path.join(model_save_dir, filename)
-
-        torch.save({
-            "model_state_dict": model.state_dict(),
-            "args": vars(args),
-            "metrics": acc_metrics,
-        }, best_acc_model_path)
-
-        if args.tensorboard:
-            writer.add_scalar('test: accuracy', test_acc, e)
-            writer.add_scalar('test: fscore', test_fscore, e)
-            writer.add_scalar('train: accuracy', train_acc, e)
-            writer.add_scalar('train: fscore', train_fscore, e)
-
-        print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
-                format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
-        if (e+1)%10 == 0:
-            print ('----------best F-Score:', max(all_fscore))
-            print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
-            print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
+            # metrics 계산
+            f1_metrics = compute_detailed_metrics(best_label_f1, best_pred_f1, sample_weight=best_mask)
+            wf1 = f1_score(best_label_f1, best_pred_f1, sample_weight=best_mask, average='weighted')
+            wacc = f1_metrics['weighted_accuracy']
+            acc = accuracy_score(best_label_f1, best_pred_f1)
             
-            print ('----------best acc:', max(all_acc))
-            print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
-            print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))
+            class_accuracy = f1_metrics["class_accuracy"]
+            class_f1 = f1_metrics["class_f1"]
+            weighted_accuracy = f1_metrics['weighted_accuracy']
+            weighted_f1 = f1_metrics['weighted_f1']
+            
+            result_dictionary = {}
+            result_dictionary['f1_w'] = weighted_f1
+            result_dictionary['acc_w'] = weighted_accuracy
+            result_dictionary['seed'] = seed_number
+            result_dictionary['timestamps'] = timestamp_str
+            for i in range(len(class_accuracy)):
+                result_dictionary[f"acc_{i}"] = class_accuracy[i]
+            
+            for i in range(len(class_f1)):
+                result_dictionary[f"f1_{i}"]= class_f1[i]
+                
+            if args.av_using_lstm:
+                result_dictionary["mode"]="MKD_AV_LSTM"
+            else:
+                result_dictionary["mode"]="MKD"
+            
+            # print(result_dictionary)
+            # print(weighted_accuracy == acc)
+            # print(weighted_f1 == wf1)
+
+            filename = f"model_f1_{best_fscore:.2f}_acc_{acc*100:.2f}_epoch_{e}_time_{timestamp_str}_seed_{seed_number}.pth"
+            
+            if best_f1_model_path==None:
+                # print("여긴데")
+                best_f1_model_path = os.path.join(model_save_dir, filename)
+            else:
+                # print("이거는")
+                # print(best_f1_model_path)
+                os.remove(str(best_f1_model_path))
+                best_f1_model_path = os.path.join(model_save_dir, filename)
+            
+            result_dictionary['path'] = best_f1_model_path
+            result_dictionary['epoch'] = e
+            
+            if os.path.exists(pickle_path):
+                with open(pickle_path, "rb") as f:
+                    tempdata = pickle.load(f)
+                    for key in tempdata.keys():
+                        tempdata[key].append(result_dictionary[key])
+            else:
+                tempdata = {}
+                for key in result_dictionary.keys():
+                    tempdata[key] = [result_dictionary[key]]
+                    
+            # print(tempdata)
+                
+                
+            with open(pickle_path, "wb") as f:
+                pickle.dump(tempdata, f)
+
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "args": vars(args),
+                "metrics": f1_metrics,
+                "timestamps": timestamp_str,
+                "seed": seed_number,
+            }, best_f1_model_path)
+                
+    
+            if args.tensorboard:
+                writer.add_scalar('test: accuracy', test_acc, e)
+                writer.add_scalar('test: fscore', test_fscore, e)
+                writer.add_scalar('train: accuracy', train_acc, e)
+                writer.add_scalar('train: fscore', train_fscore, e)
+
+            print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
+                    format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
+        # if (e+1)%10 == 0:
+        #     print ('----------best F-Score:', max(all_fscore))
+        #     print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
+        #     print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
+            
+        #     print ('----------best acc:', max(all_acc))
+        #     print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
+        #     print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))
 
 
         
