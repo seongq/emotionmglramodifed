@@ -1,6 +1,6 @@
 import numpy as np, argparse, time, random
 import torch
-def seed_everything(seed):
+def seed_everything(seed=10):
     
     random.seed(seed)
     np.random.seed(seed)

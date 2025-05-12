@@ -1,4 +1,7 @@
+#Matryoshka Representation Learning
+
 import os
+import pickle
 
 import numpy as np, argparse, time, random
 import torch
@@ -7,31 +10,15 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from dataloader import IEMOCAPDataset, MELDDataset
-from model import MaskedNLLLoss, LSTMModel, GRUModel, UNIMODALModel, MaskedMSELoss, FocalLoss
+from model import MaskedNLLLoss, LSTMModel, GRUModel, Model, MaskedMSELoss, FocalLoss, ModelMRL
 from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, classification_report
 import pickle as pk
 import datetime
 import torch.nn.functional as F
-from utils import seed_everything
+from utils import seed_everything,compute_detailed_metrics
 
-# seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
-# def seed_everything(dataset_name):
-#     random.seed(seed)
-#     np.random.seed(seed)
-#     torch.manual_seed(seed)
-#     torch.cuda.manual_seed(seed)
-#     torch.cuda.manual_seed_all(seed)
-#     torch.backends.cudnn.benchmark = False
-#     torch.backends.cudnn.deterministic = True
-# seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
-# def seed_everything(seed=seed):
-#     random.seed(seed)
-#     np.random.seed(seed)
-#     torch.manual_seed(seed)
-#     torch.cuda.manual_seed(seed)
-#     torch.cuda.manual_seed_all(seed)
-#     torch.backends.cudnn.benchmark = False
-#     torch.backends.cudnn.deterministic = True
+# seed = 67137 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
+
 
 def get_train_valid_sampler(trainset, valid=0.1, dataset='IEMOCAP'):
     size = len(trainset)
@@ -114,56 +101,36 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
         
         textf1,textf2,textf3,textf4, visuf, acouf, qmask, umask, label = [d.to(device) for d in data[:-2]] if cuda else data[:-2]
         
-        if args.multi_modal:
-            if args.mm_fusion_mthd=='concat':
-                if modals == 'avl':
-                    textf = torch.cat([acouf, visuf, textf1,textf2,textf3,textf4],dim=-1)
-                elif modals == 'av':
-                    textf = torch.cat([acouf, visuf],dim=-1)
-                elif modals == 'vl':
-                    textf = torch.cat([visuf, textf1,textf2,textf3,textf4],dim=-1)
-                elif modals == 'al':
-                    textf = torch.cat([acouf, textf1,textf2,textf3,textf4],dim=-1)
-                else:
-                    raise NotImplementedError
-            elif args.mm_fusion_mthd=='gated':
-                textf = textf
-        else:
-            if modals == 'a':
-                textf = acouf
-            elif modals == 'v':
-                textf = visuf
-            elif modals == 'l':
-                textf = textf
-            else:
-                raise NotImplementedError
+   
 
         lengths = [(umask[j] == 1).nonzero(as_tuple=False).tolist()[-1][0] + 1 for j in range(len(umask))]
 
-        if args.multi_modal and args.mm_fusion_mthd=='gated':
-            log_prob  = model(textf, qmask, umask, lengths, acouf, visuf)
-        elif args.multi_modal and args.mm_fusion_mthd=='concat_subsequently':   
-            log_prob = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
-        elif args.multi_modal and args.mm_fusion_mthd=='concat_DHT':   
-            # print(args.mm_fusion_mthd)
-            if args.modality == "text":
-                log_prob = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, epoch)
-            elif args.modality == "visual":
-                log_prob = model(visuf, qmask, umask, lengths, epoch)
-            elif args.modality == "audio":
-                log_prob = model(acouf, qmask, umask, lengths, epoch)
-                # print(log_prob.size())
-        else:
-            log_prob = model(textf, qmask, umask, lengths)
+        # if args.multi_modal and args.mm_fusion_mthd=='gated':
+        #     log_prob  = model(textf, qmask, umask, lengths, acouf, visuf)
+        # elif args.multi_modal and args.mm_fusion_mthd=='concat_subsequently':   
+        #     log_prob = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
+        # if args.multi_modal and args.mm_fusion_mthd=='concat_DHT':   
         label = torch.cat([label[j][:lengths[j]] for j in range(len(label))])
-        loss = loss_function(log_prob, label)
-        preds.append(torch.argmax(log_prob, 1).cpu().numpy())
-        labels.append(label.cpu().numpy())
-        losses.append(loss.item())
-        if train:
-            loss.backward()
-            optimizer.step()
-
+        
+        if model.training:
+            total_loss, log_prob = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch, label, loss_function)
+     
+            preds.append(torch.argmax(log_prob, 1).cpu().numpy())
+            labels.append(label.cpu().numpy())
+            losses.append(total_loss.item())
+            if train:
+                total_loss.backward()
+                optimizer.step()
+        else:
+            log_prob = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch, label, loss_function)
+       
+            loss = loss_function(log_prob, label)
+            preds.append(torch.argmax(log_prob, 1).cpu().numpy())
+            labels.append(label.cpu().numpy())
+            losses.append(loss.item())
+            if train:
+                loss.backward()
+                optimizer.step()
     if preds!=[]:
         preds  = np.concatenate(preds)
         labels = np.concatenate(labels)
@@ -205,7 +172,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--batch-size', type=int, default=16, metavar='BS', help='batch size')
     
-    parser.add_argument('--epochs', type=int, default=100, metavar='E', help='number of epochs')
+    parser.add_argument('--epochs', type=int, default=200, metavar='E', help='number of epochs')
     
     parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')
     
@@ -253,16 +220,17 @@ if __name__ == '__main__':
 
     parser.add_argument('--num_K', type=int, default=4, help='num_convs')
     
-    parser.add_argument("--modality", type=str, required=True, choices = ('text','visual', 'audio'))
     parser.add_argument("--seed_number", type=int, default=1, required=True)
+    
+    parser.add_argument("--MRL_efficient", action="store_true", default=False)
+
     args = parser.parse_args()
     today = datetime.datetime.now()
-    seed_number = args.seed_number
     print(args)
     if args.av_using_lstm:
         name_ = args.mm_fusion_mthd+'_'+args.modals+'_'+args.graph_type+'_'+args.graph_construct+'using_lstm_'+args.Dataset
     else:
-        name_ = args.mm_fusion_mthd+'_'+args.modality+'_'+args.graph_type+'_'+args.graph_construct+str(args.Deep_GCN_nlayers)+'_'+args.Dataset
+        name_ = args.mm_fusion_mthd+'_'+args.modals+'_'+args.graph_type+'_'+args.graph_construct+str(args.Deep_GCN_nlayers)+'_'+args.Dataset
         print(name_)
 
     if args.use_speaker:
@@ -278,11 +246,15 @@ if __name__ == '__main__':
         device = torch.device("cpu")
         print('Running on CPU')
 
+    if args.tensorboard:
+        from tensorboardX import SummaryWriter
+        writer = SummaryWriter()
 
     cuda       = args.cuda
     n_epochs   = args.epochs
     batch_size = args.batch_size
     modals = args.modals
+    seed_number = args.seed_number
     feat2dim = {'IS10':1582,'3DCNN':512,'textCNN':100,'bert':768,'denseface':342,'MELD_text':600,'MELD_audio':300}
     D_audio = feat2dim['IS10'] if args.Dataset=='IEMOCAP' else feat2dim['MELD_audio']
     D_visual = feat2dim['denseface']
@@ -324,9 +296,8 @@ if __name__ == '__main__':
     if args.graph_model:
         seed_everything(seed_number)
 
-        model = UNIMODALModel(args.base_model,
+        model = ModelMRL(args.base_model,
                                  D_m, D_g, D_e, graph_h,
-                                 modality = args.modality,
                                  n_speakers=n_speakers,
                                  n_classes=n_classes,
                                  dropout=args.dropout,
@@ -340,13 +311,15 @@ if __name__ == '__main__':
                                  use_residue=args.use_residue,
                                  D_m_v = D_visual,
                                  D_m_a = D_audio,
+                                 modals=args.modals,
                                  att_type=args.mm_fusion_mthd,
                                  av_using_lstm=args.av_using_lstm,
                                  dataset=args.Dataset,
                                  use_speaker=args.use_speaker,
                                  use_modal=args.use_modal,
                                  num_L = args.num_L,
-                                 num_K = args.num_K)
+                                 num_K = args.num_K,
+                                 MRL_efficient = args.MRL_efficient)
 
         print ('Graph NN with', args.base_model, 'as base model.')
         name = 'Graph'
@@ -392,57 +365,227 @@ if __name__ == '__main__':
     else:
         print("There is no such dataset")
 
-    best_fscore, best_loss, best_label, best_pred, best_mask = None, None, None, None, None
+    best_fscore, best_acc, best_loss, best_label_f1, best_label_acc, best_pred_f1, best_pred_acc , best_mask = -1000, -1000, None, None, None, None, None, None
     all_fscore, all_acc, all_loss = [], [], []
+
+   
+    model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "MRL")
+    os.makedirs(model_save_dir, exist_ok=True)
+    
     from datetime import datetime
     import pytz
 
     kst = pytz.timezone("Asia/Seoul")
     now_kst = datetime.now(kst)
     timestamp_str = now_kst.strftime("%Y%m%d%H%M")
-    best_test_acc = 0.0
-    save_path = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "unimodal", args.modality, f"unimodal_teacher_{timestamp_str}_seed_{seed_number}.pth")
-    print(save_path)
+    # print(timestamp_str)
+    pickle_path = os.path.join(f"/workspace/MGLRA/result/{args.Dataset}", "result.pkl")
+    best_f1_model_path = None
+    best_acc_model_path = None
     for e in range(n_epochs):
+        print(f"epoch: {e}")
         start_time = time.time()
 
-        train_loss, train_acc, _, _, train_fscore, _ = train_or_eval_graph_model(model, loss_function, train_loader, e, cuda, args.modals, \
+        train_loss, train_acc, _, _, train_fscore, _ = train_or_eval_graph_model(model,  loss_function, train_loader, e, cuda, args.modals, \
                                                                                  optimizer, True, dataset=args.Dataset)
-        valid_loss, valid_acc, _, _, valid_fscore = train_or_eval_graph_model(model, loss_function, valid_loader, e, cuda, args.modals, \
+        valid_loss, valid_acc, _, _, valid_fscore = train_or_eval_graph_model(model,  loss_function, valid_loader, e, cuda, args.modals, \
                                                                               dataset=args.Dataset,)
         test_loss, test_acc, test_label, test_pred, test_fscore, _ = train_or_eval_graph_model(model, loss_function, test_loader, e, cuda, args.modals, \
                                                                                                dataset=args.Dataset)
         all_fscore.append(test_fscore)
+        all_acc.append(test_acc)
 
-        if best_loss == None or best_loss > test_loss:
-            best_loss, best_label, best_pred = test_loss, test_label, test_pred
-
-        if best_fscore == None or best_fscore < test_fscore:
+        if (best_fscore < test_fscore):
+            print("fscore 높네")
             best_fscore = test_fscore
-            best_label, best_pred = test_label, test_pred
+            best_acc = test_acc
+            best_label_f1, best_pred_f1 = test_label, test_pred
+            
+            best_mask = None  # ensure mask is available
 
-        if test_acc > best_test_acc:
-            best_test_acc = test_acc
+            # metrics 계산
+            f1_metrics = compute_detailed_metrics(best_label_f1, best_pred_f1, sample_weight=best_mask)
+            wf1 = f1_score(best_label_f1, best_pred_f1, sample_weight=best_mask, average='weighted')
+            wacc = f1_metrics['weighted_accuracy']
+            acc = accuracy_score(best_label_f1, best_pred_f1)
+            
+            class_accuracy = f1_metrics["class_accuracy"]
+            class_f1 = f1_metrics["class_f1"]
+            weighted_accuracy = f1_metrics['weighted_accuracy']
+            weighted_f1 = f1_metrics['weighted_f1']
+            
+            result_dictionary = {}
+            result_dictionary['f1_w'] = weighted_f1
+            result_dictionary['acc_w'] = weighted_accuracy
+            result_dictionary['seed'] = seed_number
+            result_dictionary['timestamps'] = timestamp_str
+            for i in range(len(class_accuracy)):
+                result_dictionary[f"acc_{i}"] = class_accuracy[i]
+            
+            for i in range(len(class_f1)):
+                result_dictionary[f"f1_{i}"]= class_f1[i]
+                
+            print(model.MRL_efficient)
+            if model.MRL_efficient:
+                result_dictionary["mode"]="MRL_efficient"
+            else:
+                result_dictionary["mode"]="MRL"
+            
+            # print(result_dictionary)
+            # print(weighted_accuracy == acc)
+            # print(weighted_f1 == wf1)
+
+            filename = f"model_f1_{best_fscore:.2f}_acc_{acc*100:.2f}_epoch_{e}_time_{timestamp_str}_seed_{seed_number}.pth"
+            
+            if best_f1_model_path==None:
+                # print("여긴데")
+                best_f1_model_path = os.path.join(model_save_dir, filename)
+            else:
+                # print("이거는")
+                # print(best_f1_model_path)
+                os.remove(str(best_f1_model_path))
+                best_f1_model_path = os.path.join(model_save_dir, filename)
+            
+            result_dictionary['path'] = best_f1_model_path
+            result_dictionary['epoch'] = e
+            
+            if os.path.exists(pickle_path):
+                with open(pickle_path, "rb") as f:
+                    tempdata = pickle.load(f)
+                    for key in tempdata.keys():
+                        tempdata[key].append(result_dictionary[key])
+            else:
+                tempdata = {}
+                for key in result_dictionary.keys():
+                    tempdata[key] = [result_dictionary[key]]
+                    
+            # print(tempdata)
+                
+                
+            with open(pickle_path, "wb") as f:
+                pickle.dump(tempdata, f)
+
             torch.save({
-                'epoch':e+1,
-                "model_state_dict":model.state_dict(),
-                "optimizer_state_dict":optimizer.state_dict(),
-                "test_acc":test_acc,
-                "test_loss":test_loss}, save_path)
+                "model_state_dict": model.state_dict(),
+                "args": vars(args),
+                "metrics": f1_metrics,
+                "timestamps": timestamp_str,
+                "seed": seed_number,
+            }, best_f1_model_path)
+                
+    
+            if args.tensorboard:
+                writer.add_scalar('test: accuracy', test_acc, e)
+                writer.add_scalar('test: fscore', test_fscore, e)
+                writer.add_scalar('train: accuracy', train_acc, e)
+                writer.add_scalar('train: fscore', train_fscore, e)
 
-        print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
-                format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
-        if (e+1)%10 == 0:
-            print ('----------best F-Score:', max(all_fscore))
-            print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))
-            print(confusion_matrix(best_label,best_pred,sample_weight=best_mask))
+            print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
+                    format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
+            
+        elif (best_acc < test_acc):
+            print("accuracy가 높네")
+            best_fscore = test_fscore
+            best_acc = test_acc
+            best_label_f1, best_pred_f1 = test_label, test_pred
+            
+            best_mask = None  # ensure mask is available
+
+            # metrics 계산
+            f1_metrics = compute_detailed_metrics(best_label_f1, best_pred_f1, sample_weight=best_mask)
+            wf1 = f1_score(best_label_f1, best_pred_f1, sample_weight=best_mask, average='weighted')
+            wacc = f1_metrics['weighted_accuracy']
+            acc = accuracy_score(best_label_f1, best_pred_f1)
+            
+            class_accuracy = f1_metrics["class_accuracy"]
+            class_f1 = f1_metrics["class_f1"]
+            weighted_accuracy = f1_metrics['weighted_accuracy']
+            weighted_f1 = f1_metrics['weighted_f1']
+            
+            result_dictionary = {}
+            result_dictionary['f1_w'] = weighted_f1
+            result_dictionary['acc_w'] = weighted_accuracy
+            result_dictionary['seed'] = seed_number
+            result_dictionary['timestamps'] = timestamp_str
+            for i in range(len(class_accuracy)):
+                result_dictionary[f"acc_{i}"] = class_accuracy[i]
+            
+            for i in range(len(class_f1)):
+                result_dictionary[f"f1_{i}"]= class_f1[i]
+                
+            if model.MRL_efficient:
+                result_dictionary["mode"]="MRL_efficient"
+            else:
+                result_dictionary["mode"]="MRL"
+            
+           
+           
+            filename = f"model_f1_{best_fscore:.2f}_acc_{acc*100:.2f}_epoch_{e}_time_{timestamp_str}_seed_{seed_number}.pth"
+            
+            if best_acc_model_path==None:
+                # print("여긴데")
+                best_acc_model_path = os.path.join(model_save_dir, filename)
+            else:
+                # print("이거는")
+                # print(best_acc_model_path)
+                os.remove(str(best_acc_model_path))
+                best_acc_model_path = os.path.join(model_save_dir, filename)
+            
+            result_dictionary['path'] = best_acc_model_path
+            result_dictionary['epoch'] = e
+            
+            if os.path.exists(pickle_path):
+                with open(pickle_path, "rb") as f:
+                    tempdata = pickle.load(f)
+                    for key in tempdata.keys():
+                        tempdata[key].append(result_dictionary[key])
+            else:
+                tempdata = {}
+                for key in result_dictionary.keys():
+                    tempdata[key] = [result_dictionary[key]]
+                    
+            # print(tempdata)
+                
+                
+            with open(pickle_path, "wb") as f:
+                pickle.dump(tempdata, f)
+
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "args": vars(args),
+                "metrics": f1_metrics,
+                "timestamps": timestamp_str,
+                "seed": seed_number,
+            }, best_acc_model_path)
+                
+    
+            if args.tensorboard:
+                writer.add_scalar('test: accuracy', test_acc, e)
+                writer.add_scalar('test: fscore', test_fscore, e)
+                writer.add_scalar('train: accuracy', train_acc, e)
+                writer.add_scalar('train: fscore', train_fscore, e)
+
+            print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
+                    format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
+        # if (e+1)%10 == 0:
+        #     print ('----------best F-Score:', max(all_fscore))
+        #     print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
+        #     print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
+            
+        #     print ('----------best acc:', max(all_acc))
+        #     print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
+        #     print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))
+
 
         
     
 
+    if args.tensorboard:
+        writer.close()
     if not args.testing:
-        print('Test performance..')
+        print('Test performance.. by F-score')
         print ('F-Score:', max(all_fscore))
 
-        print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))
-        print(confusion_matrix(best_label,best_pred,sample_weight=best_mask))
+        print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
+        print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
+        print("=========학습끝") 

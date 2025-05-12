@@ -521,7 +521,9 @@ if __name__ == '__main__':
     # print(timestamp_str)
     pickle_path = os.path.join(f"/workspace/MGLRA/result/{args.Dataset}", "result.pkl")
     best_f1_model_path = None
+    best_acc_model_path = None
     for e in range(n_epochs):
+        print(f"epoch: {e}")
         start_time = time.time()
 
         train_loss, train_acc, _, _, train_fscore, _ = train_or_eval_graph_model(model, audiomodel, visualmodel, textmodel, loss_function, train_loader, e, cuda, args.modals, \
@@ -534,6 +536,7 @@ if __name__ == '__main__':
         all_acc.append(test_acc)
 
         if (best_fscore < test_fscore):
+            print("fscore 높네")
             best_fscore = test_fscore
             best_acc = test_acc
             best_label_f1, best_pred_f1 = test_label, test_pred
@@ -618,6 +621,93 @@ if __name__ == '__main__':
 
             print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
                     format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
+            
+        elif (best_acc < test_acc):
+            print("accuracy가 높네")
+            best_fscore = test_fscore
+            best_acc = test_acc
+            best_label_f1, best_pred_f1 = test_label, test_pred
+            
+            best_mask = None  # ensure mask is available
+
+            # metrics 계산
+            f1_metrics = compute_detailed_metrics(best_label_f1, best_pred_f1, sample_weight=best_mask)
+            wf1 = f1_score(best_label_f1, best_pred_f1, sample_weight=best_mask, average='weighted')
+            wacc = f1_metrics['weighted_accuracy']
+            acc = accuracy_score(best_label_f1, best_pred_f1)
+            
+            class_accuracy = f1_metrics["class_accuracy"]
+            class_f1 = f1_metrics["class_f1"]
+            weighted_accuracy = f1_metrics['weighted_accuracy']
+            weighted_f1 = f1_metrics['weighted_f1']
+            
+            result_dictionary = {}
+            result_dictionary['f1_w'] = weighted_f1
+            result_dictionary['acc_w'] = weighted_accuracy
+            result_dictionary['seed'] = seed_number
+            result_dictionary['timestamps'] = timestamp_str
+            for i in range(len(class_accuracy)):
+                result_dictionary[f"acc_{i}"] = class_accuracy[i]
+            
+            for i in range(len(class_f1)):
+                result_dictionary[f"f1_{i}"]= class_f1[i]
+                
+            if args.av_using_lstm:
+                result_dictionary["mode"]="MKD_AV_LSTM"
+            else:
+                result_dictionary["mode"]="MKD"
+            
+            # print(result_dictionary)
+            # print(weighted_accuracy == acc)
+            # print(weighted_f1 == wf1)
+
+            filename = f"model_f1_{best_fscore:.2f}_acc_{acc*100:.2f}_epoch_{e}_time_{timestamp_str}_seed_{seed_number}.pth"
+            
+            if best_acc_model_path==None:
+                # print("여긴데")
+                best_acc_model_path = os.path.join(model_save_dir, filename)
+            else:
+                # print("이거는")
+                # print(best_acc_model_path)
+                os.remove(str(best_acc_model_path))
+                best_acc_model_path = os.path.join(model_save_dir, filename)
+            
+            result_dictionary['path'] = best_acc_model_path
+            result_dictionary['epoch'] = e
+            
+            if os.path.exists(pickle_path):
+                with open(pickle_path, "rb") as f:
+                    tempdata = pickle.load(f)
+                    for key in tempdata.keys():
+                        tempdata[key].append(result_dictionary[key])
+            else:
+                tempdata = {}
+                for key in result_dictionary.keys():
+                    tempdata[key] = [result_dictionary[key]]
+                    
+            # print(tempdata)
+                
+                
+            with open(pickle_path, "wb") as f:
+                pickle.dump(tempdata, f)
+
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "args": vars(args),
+                "metrics": f1_metrics,
+                "timestamps": timestamp_str,
+                "seed": seed_number,
+            }, best_acc_model_path)
+                
+    
+            if args.tensorboard:
+                writer.add_scalar('test: accuracy', test_acc, e)
+                writer.add_scalar('test: fscore', test_fscore, e)
+                writer.add_scalar('train: accuracy', train_acc, e)
+                writer.add_scalar('train: fscore', train_fscore, e)
+
+            print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
+                    format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
         # if (e+1)%10 == 0:
         #     print ('----------best F-Score:', max(all_fscore))
         #     print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
@@ -639,9 +729,9 @@ if __name__ == '__main__':
 
         print(classification_report(best_label_f1, best_pred_f1, sample_weight=best_mask,digits=4))
         print(confusion_matrix(best_label_f1,best_pred_f1,sample_weight=best_mask))
-        
-        print('Test performance.. by Acc')
-        print ('ACC:', max(all_acc))
+        print("=========학습끝") 
+        # print('Test performance.. by Acc')
+        # print ('ACC:', max(all_acc))
 
-        print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
-        print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))
+        # print(classification_report(best_label_acc, best_pred_acc, sample_weight=best_mask,digits=4))
+        # print(confusion_matrix(best_label_acc,best_pred_acc,sample_weight=best_mask))
