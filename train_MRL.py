@@ -1,5 +1,5 @@
 #Matryoshka Representation Learning
-
+import sys
 import os
 import pickle
 
@@ -172,7 +172,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--batch-size', type=int, default=16, metavar='BS', help='batch size')
     
-    parser.add_argument('--epochs', type=int, default=200, metavar='E', help='number of epochs')
+    parser.add_argument('--epochs', type=int, default=100, metavar='E', help='number of epochs')
     
     parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')
     
@@ -223,8 +223,13 @@ if __name__ == '__main__':
     parser.add_argument("--seed_number", type=int, default=1, required=True)
     
     parser.add_argument("--MRL_efficient", action="store_true", default=False)
+    
+    parser.add_argument("--MRL_random", action="store_true", default=False)
 
     args = parser.parse_args()
+    
+    if (args.MRL_efficient==False) and (args.MRL_random==True):
+        sys.exit()
     today = datetime.datetime.now()
     print(args)
     if args.av_using_lstm:
@@ -319,7 +324,8 @@ if __name__ == '__main__':
                                  use_modal=args.use_modal,
                                  num_L = args.num_L,
                                  num_K = args.num_K,
-                                 MRL_efficient = args.MRL_efficient)
+                                 MRL_efficient = args.MRL_efficient,
+                                 MRL_random = args.MRL_random)
 
         print ('Graph NN with', args.base_model, 'as base model.')
         name = 'Graph'
@@ -427,7 +433,10 @@ if __name__ == '__main__':
                 
             print(model.MRL_efficient)
             if model.MRL_efficient:
-                result_dictionary["mode"]="MRL_efficient"
+                if model.MRL_random:
+                    result_dictionary['mode'] ="MRL_efficient_randomselect"
+                else:
+                    result_dictionary["mode"]="MRL_efficient"
             else:
                 result_dictionary["mode"]="MRL"
             
@@ -514,7 +523,10 @@ if __name__ == '__main__':
                 result_dictionary[f"f1_{i}"]= class_f1[i]
                 
             if model.MRL_efficient:
-                result_dictionary["mode"]="MRL_efficient"
+                if model.MRL_random:
+                    result_dictionary['mode'] ="MRL_efficient_randomselect"
+                else:
+                    result_dictionary["mode"]="MRL_efficient"
             else:
                 result_dictionary["mode"]="MRL"
             

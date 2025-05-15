@@ -14,9 +14,12 @@ for i in range(num_runs):
     script = random.choice(scripts)
     dataset = random.choice(datasets)
     efficient = random.choice([True, False])
+    randomness = random.choice([True, False])
     seed = random.randint(1, 10000)
     cmd = ['python', script, '--Dataset', dataset, '--seed_number', str(seed)]
     if efficient:
         cmd.append('--MRL_efficient')
+    if randomness:
+        cmd.append("--MRL_random")
     print(f"\n[{i+1}/{num_runs}] Running: {' '.join(cmd)}")
     subprocess.run(cmd)

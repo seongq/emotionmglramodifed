@@ -1150,10 +1150,13 @@ class ModelMRL(nn.Module):
                  n_classes=7, dropout=0.5, avec=False, 
                  no_cuda=False, graph_type='relation', use_topic=False, alpha=0.2, multiheads=6, graph_construct='direct', use_GCN=False,use_residue=True,
                  dynamic_edge_w=False,D_m_v=512,D_m_a=100,modals='avl',att_type='gated',av_using_lstm=False, dataset='IEMOCAP',
-                 use_speaker=True, use_modal=False, num_L = 3, num_K = 4, MRL_efficient = True):
+                 use_speaker=True, use_modal=False, num_L = 3, num_K = 4, MRL_efficient = True, MRL_random=True):
         
         super(ModelMRL, self).__init__()
         self.MRL_efficient = MRL_efficient
+        
+        self.MRL_random = MRL_random
+        print("MRL random", MRL_random)
         print(self.MRL_efficient)
         self.base_model = base_model
         self.avec = avec
@@ -1243,7 +1246,7 @@ class ModelMRL(nn.Module):
             # else:
             #     self.smax_fc = nn.Linear(D_g+graph_hidden_size*len(self.modals), graph_hidden_size)
         
-        if self.MRL_efficient:
+        if self.MRL_efficient==True:
             hiddensizes = []
             temp_hiddensize = (graph_hidden_size*2)*len(self.modals) //2
             while temp_hiddensize >= 3:
@@ -1374,17 +1377,34 @@ class ModelMRL(nn.Module):
                     total_loss = 0.0
                     uni_modality_length = emotions_feat.shape[-1]//3
                     # print(uni_modality_length)
-                    for k, hiddensize in enumerate(self.hiddensizes):
-                        uni_hiddensize = hiddensize//3    
-                        
-                        x_selected = torch.cat([emotions_feat[:,i*uni_modality_length:i*uni_modality_length+uni_hiddensize] for i in range(3)], dim=-1)
-                        
-                        weight_selected = torch.cat([self.smax_fc.weight[:,i*uni_modality_length:i*uni_modality_length+uni_hiddensize] for i in range(3)], dim=1)
-                        
-                        log_prob_selected = F.log_softmax(x_selected@weight_selected.T+self.smax_fc.bias,1)
-                        
-                        
-                        total_loss += loss_function(log_prob_selected, label)
+                    DIMENSION= emotions_feat.shape[-1]
+                    if self.MRL_random==True:
+                        # print("MRL_efficient", self.MRL_efficient, "MRL_random", self.MRL_random)
+                        full_indices = torch.randperm(DIMENSION)
+                        for k, hiddensize in enumerate(self.hiddensizes):
+                            sub_index = full_indices[:hiddensize]
+                            x_selected =emotions_feat[:, sub_index]
+                            # print(sub_index.shape)
+                            weight_selected =self.smax_fc.weight[:, sub_index]
+                            
+                            log_prob_selected = F.log_softmax(x_selected@weight_selected.T+self.smax_fc.bias,1)
+                            
+                            
+                            total_loss += loss_function(log_prob_selected, label)
+                    else:
+                        for k, hiddensize in enumerate(self.hiddensizes):
+                            # print("MRL_efficient", self.MRL_efficient, "MRL_random", self.MRL_random)
+                            uni_hiddensize = hiddensize//3    
+                            # print("여기여야 하는데")
+                            # print(self.MRL_random)
+                            x_selected = torch.cat([emotions_feat[:,i*uni_modality_length:i*uni_modality_length+uni_hiddensize] for i in range(3)], dim=-1)
+                            
+                            weight_selected = torch.cat([self.smax_fc.weight[:,i*uni_modality_length:i*uni_modality_length+uni_hiddensize] for i in range(3)], dim=1)
+                            
+                            log_prob_selected = F.log_softmax(x_selected@weight_selected.T+self.smax_fc.bias,1)
+                            
+                            
+                            total_loss += loss_function(log_prob_selected, label)
                     
                     log_prob = F.log_softmax(self.smax_fc(emotions_feat), 1)
                     total_loss += loss_function(log_prob, label)
