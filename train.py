@@ -183,7 +183,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--batch-size', type=int, default=16, metavar='BS', help='batch size')
     
-    parser.add_argument('--epochs', type=int, default=100, metavar='E', help='number of epochs')
+    parser.add_argument('--epochs', type=int, default=300, metavar='E', help='number of epochs')
     
     parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')
     
@@ -233,6 +233,11 @@ if __name__ == '__main__':
     
     parser.add_argument("--seed_number", type=int, default=1, required=True)
 
+    parser.add_argument("--self_attention", action="store_true", default=False)
+    
+    parser.add_argument("--original_gcn", default=False, action="store_true")
+    
+    parser.add_argument("--graph_masking", default=True, action="store_false")
     args = parser.parse_args()
     today = datetime.datetime.now()
     print(args)
@@ -304,7 +309,8 @@ if __name__ == '__main__':
 
     if args.graph_model:
         seed_everything(seed_number)
-
+        print(args.original_gcn)
+        print(args.graph_masking)
         model = Model(args.base_model,
                                  D_m, D_g, D_e, graph_h,
                                  n_speakers=n_speakers,
@@ -327,7 +333,10 @@ if __name__ == '__main__':
                                  use_speaker=args.use_speaker,
                                  use_modal=args.use_modal,
                                  num_L = args.num_L,
-                                 num_K = args.num_K)
+                                 num_K = args.num_K,
+                                 modality_self_attention = args.self_attention,
+                                 original_gcn= args.original_gcn,
+                                 graph_masking=args.graph_masking)
 
         print ('Graph NN with', args.base_model, 'as base model.')
         name = 'Graph'
@@ -376,12 +385,15 @@ if __name__ == '__main__':
     best_fscore, best_acc, best_loss, best_label_f1, best_label_acc, best_pred_f1, best_pred_acc , best_mask = -1000, -1000, None, None, None, None, None, None
     all_fscore, all_acc, all_loss = [], [], []
 
+
+# original_gcn", default=False, action="store_true")
     
+#     parser.add_argument("--graph_masking"    
     if args.av_using_lstm:
-        model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "original_av_using_lstm")
+        model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, f"original_av_using_lstm_self_attention_{args.self_attention}_graphmasking_{args.graph_masking}_originalgcn_{args.original_gcn}")
         os.makedirs(model_save_dir, exist_ok=True)
     else:
-        model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, "original")
+        model_save_dir = os.path.join("/workspace/MGLRA/save_folder", args.Dataset, f"original_self_attention_{args.self_attention}_graphmasking_{args.graph_masking}_originalgcn_{args.original_gcn}")
         os.makedirs(model_save_dir, exist_ok=True)
     
     from datetime import datetime
@@ -438,9 +450,9 @@ if __name__ == '__main__':
                 result_dictionary[f"f1_{i}"]= class_f1[i]
                 
             if args.av_using_lstm:
-                result_dictionary["mode"]="ORIGINAL_AV_LSTM"
+                result_dictionary["mode"]=f"ORIGINAL_AV_LSTM_self_attention_{args.self_attention}_graph_masking_{args.graph_masking}_originalgcn_{args.original_gcn}"
             else:
-                result_dictionary["mode"]="ORIGINAL"
+                result_dictionary["mode"]=f"ORIGINAL_self_attention_{args.self_attention}_graph_masking_{args.graph_masking}_originalgcn_{args.original_gcn}"
             
             # print(result_dictionary)
             # print(weighted_accuracy == acc)
@@ -525,9 +537,9 @@ if __name__ == '__main__':
                 result_dictionary[f"f1_{i}"]= class_f1[i]
                 
             if args.av_using_lstm:
-                result_dictionary["mode"]="ORIGINAL_AV_LSTM"
+                result_dictionary["mode"]=f"ORIGINAL_AV_LSTM_self_attention_{args.self_attention}_graph_masking_{args.graph_masking}_originalgcn_{args.original_gcn}"
             else:
-                result_dictionary["mode"]="ORIGINAL"
+                result_dictionary["mode"]=f"ORIGINAL_self_attention_{args.self_attention}__graph_masking_{args.graph_masking}_originalgcn_{args.original_gcn}"
             
             # print(result_dictionary)
             # print(weighted_accuracy == acc)

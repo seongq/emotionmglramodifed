@@ -78,12 +78,15 @@ class PositionalEncoding(nn.Module):
 
 class GCN(nn.Module):
     def __init__(self, n_dim, nhidden, dropout, lamda, alpha, variant, return_feature, use_residue, 
-                new_graph='full',n_speakers=2, modals=['a','v','l'], use_speaker=True, use_modal=False, num_L=3, num_K=4):
+                new_graph='full',n_speakers=2, modals=['a','v','l'], use_speaker=True, use_modal=False, num_L=3, num_K=4, original_gcn=False, graph_masking=True):
         super(GCN, self).__init__()
         self.return_feature = return_feature  #True
         self.use_residue = use_residue
         self.new_graph = new_graph
 
+        self.original_gcn = original_gcn
+        self.graph_masking = graph_masking
+        
         self.act_fn = nn.ReLU()
         self.dropout = dropout
         self.alpha = alpha
@@ -104,7 +107,7 @@ class GCN(nn.Module):
         self.hyperedge_attr1 = nn.Parameter(torch.rand(nhidden))
         self.hyperedge_attr2 = nn.Parameter(torch.rand(nhidden))
         for kk in range(num_K):
-            setattr(self,'conv%d' %(kk+1), GraphGCN(nhidden, nhidden))
+            setattr(self,'conv%d' %(kk+1), GraphGCN(nhidden, nhidden, original_gcn = self.original_gcn, graph_masking=self.graph_masking))
 
     def forward(self, a, v, l, dia_len, qmask, epoch):
         qmask = torch.cat([qmask[:x,i,:] for i,x in enumerate(dia_len)],dim=0)
@@ -140,7 +143,10 @@ class GCN(nn.Module):
         out = x1
         gnn_out = x1
         for kk in range(self.num_K):
-            gnn_out = gnn_out + getattr(self,'conv%d' %(kk+1))(gnn_out,gnn_edge_index)
+            if self.original_gcn:
+                gnn_out = getattr(self,'conv%d' %(kk+1))(gnn_out,gnn_edge_index)
+            else:
+                gnn_out = gnn_out + getattr(self,'conv%d' %(kk+1))(gnn_out,gnn_edge_index)
 
         out2 = torch.cat([out,gnn_out], dim=1)
         if self.use_residue:

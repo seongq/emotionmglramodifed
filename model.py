@@ -490,10 +490,13 @@ class Model(nn.Module):
                  n_classes=7, dropout=0.5, avec=False, 
                  no_cuda=False, graph_type='relation', use_topic=False, alpha=0.2, multiheads=6, graph_construct='direct', use_GCN=False,use_residue=True,
                  dynamic_edge_w=False,D_m_v=512,D_m_a=100,modals='avl',att_type='gated',av_using_lstm=False, dataset='IEMOCAP',
-                 use_speaker=True, use_modal=False, num_L = 3, num_K = 4):
+                 use_speaker=True, use_modal=False, num_L = 3, num_K = 4, modality_self_attention=False, modality_LSTM=False, original_gcn=False, graph_masking=True):
         
         super(Model, self).__init__()
-
+        self.original_gcn = original_gcn
+        self.graph_masking = graph_masking
+        self.modality_self_attention = modality_self_attention
+        self.modality_LSTM = modality_LSTM
         self.base_model = base_model
         self.avec = avec
         self.no_cuda = no_cuda
@@ -554,11 +557,17 @@ class Model(nn.Module):
         else:
             print ('Base model must be one of DialogRNN/LSTM/GRU')
             raise NotImplementedError
-
-        self.align = MultiHeadCrossModalAttention(D_g, D_g, D_g, 2) 
+        if self.modality_self_attention:
+            
+            self.a_align = MultiHeadCrossModalAttention(D_g, D_g, D_g, 2) 
+            self.v_align = MultiHeadCrossModalAttention(D_g, D_g, D_g, 2) 
+            self.l_align = MultiHeadCrossModalAttention(D_g, D_g, D_g, 2) 
+        
+        else:
+            self.align = MultiHeadCrossModalAttention(D_g, D_g, D_g, 2) 
 
         self.graph_model = GCN(n_dim=D_g, nhidden=graph_hidden_size, 
-                                        dropout=self.dropout, lamda=0.5, alpha=0.1, variant=True, return_feature=self.return_feature, use_residue=self.use_residue, n_speakers=n_speakers, modals=self.modals, use_speaker=self.use_speaker, use_modal=self.use_modal, num_L=num_L, num_K=num_K)
+                                        dropout=self.dropout, lamda=0.5, alpha=0.1, variant=True, return_feature=self.return_feature, use_residue=self.use_residue, n_speakers=n_speakers, modals=self.modals, use_speaker=self.use_speaker, use_modal=self.use_modal, num_L=num_L, num_K=num_K, original_gcn=self.original_gcn, graph_masking=self.graph_masking)
         print("construct "+self.graph_type)
 
         if self.multi_modal:
@@ -645,9 +654,14 @@ class Model(nn.Module):
                     emotions_l, _ = self.lstm_l(U)
                     
                     
-
-                emotions_a = self.align(emotions_a, emotions_l) 
-                emotions_v = self.align(emotions_v, emotions_l) 
+                if self.modality_self_attention:
+                    emotions_a = self.a_align(emotions_a, emotions_a)
+                    emotions_v = self.v_align(emotions_v, emotions_v)
+                    emotions_l = self.l_align(emotions_l, emotions_l)
+                
+                else:
+                    emotions_a = self.align(emotions_a, emotions_l) 
+                    emotions_v = self.align(emotions_v, emotions_l) 
                     
         if not self.multi_modal:
             
