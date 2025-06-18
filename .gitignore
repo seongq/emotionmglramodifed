@@ -5,5 +5,5 @@ run.sh
 result
 result/
 *.ipynb
-*.csv
+*csv
 ./*.csv
